@@ -49,12 +49,6 @@ else()
   set(MLIR_INCLUDE_DIRS "${MLIR_INCLUDE_DIR};${MLIR_GENERATED_INCLUDE_DIR}")
 endif()
 
-# Python shenanigans
-if(MLIR_ENABLE_BINDINGS_PYTHON)
-  include(MLIRDetectPythonEnv)
-  mlir_configure_python_dev_packages()
-endif()
-
 # LLVM and MLIR include directories
 set(STANDALONE_SOURCE_DIR ${PROJECT_SOURCE_DIR})
 set(STANDALONE_BINARY_DIR ${PROJECT_BINARY_DIR})
@@ -71,27 +65,20 @@ add_definitions(${LLVM_DEFINITIONS})
 add_subdirectory(include)
 add_subdirectory(lib)
 add_subdirectory(compiler)
-add_subdirectory(mlir)
 
 # toyc target
 add_llvm_executable(toyc 
   compiler/toyc.cpp 
   compiler/AST.cpp
-  mlir/Dialect.cpp
-  mlir/MLIRGen.cpp
+  lib/Toy/Dialect.cpp
+  lib/Toy/MLIRGen.cpp
 )
 
 llvm_update_compile_flags(toyc)
 message(STATUS "LLVM_LIBS: ${llvm_libs}")
 target_include_directories(toyc PRIVATE ${CMAKE_SOURCE_DIR}/include)
-# target_link_libraries(toyc PRIVATE
-#   ${llvm_libs}
-  
-#   MLIRSupport
 
-# )
-
-set(MLIR_LIBRARIES
+set(mlir_libs
   MLIRIR
   MLIRParser
   MLIRBytecodeReader
@@ -106,9 +93,8 @@ set(MLIR_LIBRARIES
 )
 
 target_link_libraries(toyc PRIVATE
-  ${MLIR_LIBRARIES}
+  ${mlir_libs}
   ${llvm_libs}
-  LLVMSupport
 )
 
-mlir_check_link_libraries(toyc)
+# mlir_check_link_libraries(toyc)
