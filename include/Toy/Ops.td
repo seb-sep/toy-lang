@@ -1,210 +1,154 @@
-//===- Ops.td - Toy dialect operation definitions ----------*- tablegen -*-===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-//
-// Defines the operations of the Toy dialect.
-//
-//===----------------------------------------------------------------------===//
 
 #ifndef TOY_OPS
 #define TOY_OPS
 
 include "mlir/IR/OpBase.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/FunctionInterfaces.td"
 include "mlir/IR/SymbolInterfaces.td"
-include "mlir/Interfaces/SideEffectInterfaces.td"
 
-// Provide a definition of the 'toy' dialect in the ODS framework so that we
-// can define our operations.
-def Toy_Dialect : Dialect {
-  let name = "toy";
-  let cppNamespace = "::mlir::toy";
+def Toy_Dialect: Dialect {
+    let name = "toy";
+    let summary = "A high level dialect for the Toy language";
+    let cppNamespace = "::mlir::toy";
 }
 
-// Base class for toy dialect operations. This operation inherits from the base
-// `Op` class in OpBase.td, and provides:
-//   * The parent dialect of the operation.
-//   * The mnemonic for the operation, or the name without the dialect prefix.
-//   * A list of traits for the operation.
-class Toy_Op<string mnemonic, list<Trait> traits = []> :
+class Toy_Op<string mnemonic, list<Trait> traits = []>:
     Op<Toy_Dialect, mnemonic, traits>;
 
-//===----------------------------------------------------------------------===//
-// Toy Operations
-//===----------------------------------------------------------------------===//
+// Pure trait is an alias for speculative execution and no memory use traits:
+// https://www.jeremykun.com/2023/09/07/mlir-using-traits/
+def ConstantOp: Toy_Op<"constant", [Pure]> {
 
-//===----------------------------------------------------------------------===//
-// ConstantOp
-//===----------------------------------------------------------------------===//
+    let summary = "constant operation";
+    let description = [{
+        Constant operation turns a literal into an SSA value. The data is attached
+        to the operation as an attribute. For example:
 
-// We define a toy operation by inheriting from our base 'Toy_Op' class above.
-// Here we provide the mnemonic and a list of traits for the operation. The
-// constant operation is marked as 'Pure' as it is a pure operation
-// and may be removed if dead.
-def ConstantOp : Toy_Op<"constant", [Pure]> {
-  // Provide a summary and description for this operation. This can be used to
-  // auto-generate documentation of the operations within our dialect.
-  let summary = "constant";
-  let description = [{
-    Constant operation turns a literal into an SSA value. The data is attached
-    to the operation as an attribute. For example:
+        %0 = "toy.constant"()
+            { value = dense<[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]> : tensor<2x3xf64> }
+            : () -> tensor<2x3xf64>
+    }];
 
-    ```mlir
-      %0 = toy.constant dense<[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]>
-                        : tensor<2x3xf64>
-    ```
-  }];
+    // remember what an attribute is: a constant you can pass to an op between the brackets,
+    // it is STATIC
+    // we can't then use the constant op with a runtime value
+    // the use of the attr makes it an attribute 
+    let arguments = (ins F64ElementsAttr:$value);
+    let results = (outs F64Tensor);
 
-  // The constant operation takes an attribute as the only input.
-  let arguments = (ins F64ElementsAttr:$value);
+    // creates a mlir::LogicalResult::verify() stub in the corresponding generated c++ file
+    let hasVerifier = 1;
 
-  // The constant operation returns a single value of TensorType.
-  let results = (outs F64Tensor);
 
-  // Indicate that the operation has a custom parser and printer method.
-  let hasCustomAssemblyFormat = 1;
-
-  // Add custom build methods for the constant operation. These method populates
-  // the `state` that MLIR uses to create operations, i.e. these are used when
-  // using `builder.create<ConstantOp>(...)`.
-  let builders = [
-    // Build a constant with a given constant tensor value.
-    OpBuilder<(ins "DenseElementsAttr":$value), [{
-      build($_builder, $_state, value.getType(), value);
-    }]>,
-
-    // Build a constant with a given constant floating-point value.
-    OpBuilder<(ins "double":$value)>
-  ];
-
-  // Indicate that additional verification for this operation is necessary.
-  let hasVerifier = 1;
+    let builders = [
+        OpBuilder<(ins "DenseElementsAttr":$value), [{
+            build(builder, result, value.getType(), value);
+        }]>,
+        OpBuilder<(ins "double":$value)>
+    ];
 }
 
-//===----------------------------------------------------------------------===//
-// AddOp
-//===----------------------------------------------------------------------===//
+def AddOp: Toy_Op<"add"> {
+    let summary = "element wise addition";
+    let description = [{
+        The "add" operation performs element-wise addition between two tensors.
+        The shapes of the tensor operands are expected to match.
+    }];
 
-def AddOp : Toy_Op<"add"> {
-  let summary = "element-wise addition operation";
-  let description = [{
-    The "add" operation performs element-wise addition between two tensors.
-    The shapes of the tensor operands are expected to match.
-  }];
+    let arguments = (ins F64Tensor:$lhs, F64Tensor:$rhs);
+    let results = (outs F64Tensor);
 
-  let arguments = (ins F64Tensor:$lhs, F64Tensor:$rhs);
-  let results = (outs F64Tensor);
-
-  // Indicate that the operation has a custom parser and printer method.
-  let hasCustomAssemblyFormat = 1;
-
-  // Allow building an AddOp with from the two input operands.
-  let builders = [
-    OpBuilder<(ins "Value":$lhs, "Value":$rhs)>
-  ];
+    let builders = [
+        OpBuilder<(ins "Value":$lhs, "Value":$rhs)>
+    ];
 }
 
-//===----------------------------------------------------------------------===//
-// FuncOp
-//===----------------------------------------------------------------------===//
 
-def FuncOp : Toy_Op<"func", [
+// isolatedfromabove trait means that it does not capture values
+// from the greater scope
+// https://mlir.llvm.org/docs/Traits/#isolatedfromabove
+def FuncOp: Toy_Op<"func", [
     FunctionOpInterface, IsolatedFromAbove
-  ]> {
-  let summary = "user defined function operation";
-  let description = [{
-    The "toy.func" operation represents a user defined function. These are
-    callable SSA-region operations that contain toy computations.
+]> {
 
-    Example:
+    let description = [{
+        The "toy.func" operation represents a user defined function. These are
+        callable SSA-region operations that contain toy computations.
 
-    ```mlir
-    toy.func @main() {
-      %0 = toy.constant dense<5.500000e+00> : tensor<f64>
-      %1 = toy.reshape(%0 : tensor<f64>) to tensor<2x2xf64>
-      toy.print %1 : tensor<2x2xf64>
-      toy.return
-    }
-    ```
-  }];
+        Example:
 
-  let arguments = (ins
-    SymbolNameAttr:$sym_name,
-    TypeAttrOf<FunctionType>:$function_type,
-    OptionalAttr<DictArrayAttr>:$arg_attrs,
-    OptionalAttr<DictArrayAttr>:$res_attrs
-  );
-  let regions = (region AnyRegion:$body);
+        ```mlir
+        toy.func @main() {
+        %0 = toy.constant dense<5.500000e+00> : tensor<f64>
+        %1 = toy.reshape(%0 : tensor<f64>) to tensor<2x2xf64>
+        toy.print %1 : tensor<2x2xf64>
+        toy.return
+        }
+        ```
+    }];
 
-  let builders = [OpBuilder<(ins
-    "StringRef":$name, "FunctionType":$type,
-    CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs)
-  >];
+    let arguments = (ins
+        SymbolNameAttr:$sym_name, // the name of the fn, pass as a symbol attr
+        TypeAttrOf<FunctionType>:$function_type, //type of function ins and outs?
+        OptionalAttr<DictArrayAttr>:$arg_attrs, 
+        OptionalAttr<DictArrayAttr>:$res_attrs
+    );
 
-  let extraClassDeclaration = [{
-    //===------------------------------------------------------------------===//
-    // FunctionOpInterface Methods
-    //===------------------------------------------------------------------===//
+    let regions = (region AnyRegion:$body);
 
-    /// Returns the argument types of this function.
-    ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
+    let builders = [OpBuilder<(ins
+        "StringRef":$name, "FunctionType":$type,
+        CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs
+    )>];
 
-    /// Returns the result types of this function.
-    ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
+    // I guess extraClassDeclaration lets us add arbitrary cpp code to the class?
+    let extraClassDeclaration = [{
 
-    Region *getCallableRegion() { return &getBody(); }
-  }];
+        // implement FunctionOpInterface
+        // functions have arg and result types, and a body, so we just define getters
 
-  let hasCustomAssemblyFormat = 1;
-  let skipDefaultBuilders = 1;
+        ArrayRef<Type> getArgumentTypes() { return getFunctionType().getInputs(); }
+        ArrayRef<Type> getResultTypes() { return getFunctionType().getResults(); }
+
+        Region *getCallableRegion() { return &getBody(); }
+    }];
+
+    // https://mlir.llvm.org/docs/DefiningDialects/AttributesAndTypes/
+    // when do we not want to define the default builders?
+    let skipDefaultBuilders = 1;
 }
-
-//===----------------------------------------------------------------------===//
-// GenericCallOp
-//===----------------------------------------------------------------------===//
 
 def GenericCallOp : Toy_Op<"generic_call"> {
-  let summary = "generic call operation";
-  let description = [{
-    Generic calls represent calls to a user defined function that needs to
-    be specialized for the shape of its arguments. The callee name is attached
-    as a symbol reference via an attribute. The arguments list must match the
-    arguments expected by the callee. For example:
+    
+    // we need a generic verison of call because we only sometimes need to do
+    // shape inference
+    let description = [{
+        Generic calls represent calls to a user defined function that needs to
+        be specialized for the shape of its arguments. The callee name is attached
+        as a symbol reference via an attribute. The arguments list must match the
+        arguments expected by the callee. For example:
 
-    ```mlir
-     %4 = toy.generic_call @my_func(%1, %3)
-           : (tensor<2x3xf64>, tensor<2x3xf64>) -> tensor<*xf64>
-    ```
+        ```mlir
+        %4 = toy.generic_call @my_func(%1, %3)
+            : (tensor<2x3xf64>, tensor<2x3xf64>) -> tensor<*xf64>
+        ```
 
-    This is only valid if a function named "my_func" exists and takes two
-    arguments.
-  }];
+        This is only valid if a function named "my_func" exists and takes two
+        arguments.
+    }];
 
-  // The generic call operation takes a symbol reference attribute as the
-  // callee, and inputs for the call.
-  let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<F64Tensor>:$inputs);
+    // we're allowed to define the arguments like this because
+    // the only type in Toy is an f64tensor, so all args will be a list of tensors
+    let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<F64Tensor>:$inputs);
 
-  // The generic call operation returns a single value of TensorType.
-  let results = (outs F64Tensor);
+    let results = (outs F64Tensor);
 
-  // Specialize assembly printing and parsing using a declarative format.
-  let assemblyFormat = [{
-    $callee `(` $inputs `)` attr-dict `:` functional-type($inputs, results)
-  }];
+    let builders = [
+        OpBuilder<(ins "StringRef":$callee, "ArrayRef<Value>":$arguments)>
+    ];
 
-  // Add custom build methods for the generic call operation.
-  let builders = [
-    OpBuilder<(ins "StringRef":$callee, "ArrayRef<Value>":$arguments)>
-  ];
 }
-
-//===----------------------------------------------------------------------===//
-// MulOp
-//===----------------------------------------------------------------------===//
 
 def MulOp : Toy_Op<"mul"> {
   let summary = "element-wise multiplication operation";
@@ -216,120 +160,80 @@ def MulOp : Toy_Op<"mul"> {
   let arguments = (ins F64Tensor:$lhs, F64Tensor:$rhs);
   let results = (outs F64Tensor);
 
-  // Indicate that the operation has a custom parser and printer method.
   let hasCustomAssemblyFormat = 1;
 
-  // Allow building a MulOp with from the two input operands.
   let builders = [
     OpBuilder<(ins "Value":$lhs, "Value":$rhs)>
   ];
-}
-
-//===----------------------------------------------------------------------===//
-// PrintOp
-//===----------------------------------------------------------------------===//
+} 
 
 def PrintOp : Toy_Op<"print"> {
-  let summary = "print operation";
-  let description = [{
-    The "print" builtin operation prints a given input tensor, and produces
-    no results.
-  }];
-
-  // The print operation takes an input tensor to print.
-  let arguments = (ins F64Tensor:$input);
-
-  let assemblyFormat = "$input attr-dict `:` type($input)";
+    
+    let description = [{
+        The "print" builtin operation prints a given input tensor, and produces
+        no results.
+    }];
+    let arguments = (ins F64Tensor:$value);
 }
-
-//===----------------------------------------------------------------------===//
-// ReshapeOp
-//===----------------------------------------------------------------------===//
 
 def ReshapeOp : Toy_Op<"reshape"> {
-  let summary = "tensor reshape operation";
-  let description = [{
-    Reshape operation is transforming its input tensor into a new tensor with
-    the same number of elements but different shapes. For example:
+    let description = [{
+        Reshape operation is transforming its input tensor into a new tensor with
+        the same number of elements but different shapes. For example:
 
-    ```mlir
-       %0 = toy.reshape (%arg1 : tensor<10xf64>) to tensor<5x2xf64>
-    ```
-  }];
+        ```mlir
+        %0 = toy.reshape (%arg1 : tensor<10xf64>) to tensor<5x2xf64>
+        ```
+    }];
 
-  let arguments = (ins F64Tensor:$input);
+    let arguments = (ins F64Tensor:$value);
 
-  // We expect that the reshape operation returns a statically shaped tensor.
-  let results = (outs StaticShapeTensorOf<[F64]>);
+    // must be reshaping to a statically known type, 
+    // the list in StaticShapeTensorOf is a list of allowed types to be in said tensor
+    let results = (outs StaticShapeTensorOf<[F64]>);
 
-  let assemblyFormat = [{
-    `(` $input `:` type($input) `)` attr-dict `to` type(results)
-  }];
 }
 
-//===----------------------------------------------------------------------===//
-// ReturnOp
-//===----------------------------------------------------------------------===//
+def ReturnOp : Toy_Op<"return", [Pure, HasParent<"FuncOp">, Terminator]> {
+    let description = [{
+        The "return" operation represents a return operation within a function.
+        The operation takes an optional tensor operand and produces no results.
+        The operand type must match the signature of the function that contains
+        the operation. For example:
 
-def ReturnOp : Toy_Op<"return", [Pure, HasParent<"FuncOp">,
-                                 Terminator]> {
-  let summary = "return operation";
-  let description = [{
-    The "return" operation represents a return operation within a function.
-    The operation takes an optional tensor operand and produces no results.
-    The operand type must match the signature of the function that contains
-    the operation. For example:
-
-    ```mlir
-      toy.func @foo() -> tensor<2xf64> {
-        ...
-        toy.return %0 : tensor<2xf64>
-      }
-    ```
+        ```mlir
+        toy.func @foo() -> tensor<2xf64> {
+            ...
+            toy.return %0 : tensor<2xf64>
+        }
+        ```
   }];
 
-  // The return operation takes an optional input operand to return. This
-  // value must match the return type of the enclosing function.
   let arguments = (ins Variadic<F64Tensor>:$input);
 
-  // The return operation only emits the input in the format if it is present.
-  let assemblyFormat = "($input^ `:` type($input))? attr-dict ";
-
-  // Allow building a ReturnOp with no return operand.
   let builders = [
     OpBuilder<(ins), [{ build($_builder, $_state, std::nullopt); }]>
   ];
 
-  // Provide extra utility definitions on the c++ operation class definition.
   let extraClassDeclaration = [{
     bool hasOperand() { return getNumOperands() != 0; }
   }];
 
-  // Invoke a static verify method to verify this return operation.
   let hasVerifier = 1;
 }
-
-//===----------------------------------------------------------------------===//
-// TransposeOp
-//===----------------------------------------------------------------------===//
 
 def TransposeOp : Toy_Op<"transpose"> {
-  let summary = "transpose operation";
+    let summary = "transpose operation";
 
-  let arguments = (ins F64Tensor:$input);
-  let results = (outs F64Tensor);
+    let arguments = (ins F64Tensor:$input);
+    let results = (outs F64Tensor);
 
-  let assemblyFormat = [{
-    `(` $input `:` type($input) `)` attr-dict `to` type(results)
-  }];
+    let builders = [
+        OpBuilder<(ins "Value":$input)>
+    ];
 
-  // Allow building a TransposeOp with from the input operand.
-  let builders = [
-    OpBuilder<(ins "Value":$input)>
-  ];
-
-  // Invoke a static verify method to verify this transpose operation.
-  let hasVerifier = 1;
+    let hasVerifier = 1;
 }
 
+// Adding the comment of TOY_OPS here is actually necessary to match with the #ifndef at the top
 #endif // TOY_OPS
