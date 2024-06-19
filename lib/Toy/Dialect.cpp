@@ -20,7 +20,10 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/Location.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
+#include "mlir/Interfaces/CallInterfaces.h"
+#include "mlir/Transforms/InliningUtils.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -29,11 +32,67 @@
 #include "llvm/Support/Casting.h"
 #include <algorithm>
 #include <string>
+#include <cstdint>
 
 using namespace mlir;
 using namespace mlir::toy;
 
 #include "Toy/Dialect.cpp.inc"
+
+
+// ToyInliner
+struct ToyInlinerInterface : public DialectInlinerInterface {
+  using DialectInlinerInterface::DialectInlinerInterface;
+
+
+  // All call ops can be inlined
+  bool isLegalToInline(
+    Operation *call, 
+    Operation *callable, 
+    bool wouldBeCloned
+  ) const final {
+    return true;
+  }
+
+
+  // All ops withing a toy region can be inlined
+  bool isLegalToInline(Operation *, Region *, bool, IRMapping &) const final {
+    llvm::outs() << "legal to inline";
+    return true;
+  }
+
+  // All regions (toy fns) can be inlined
+  bool isLegalToInline(Region *dest, Region *src, bool wouldBeCloned, IRMapping &valueMapping) const final {
+    llvm::outs() << "legal to inline";
+    return true;
+  }
+
+  void handleTerminator(
+    Operation *op,
+    ValueRange valuesToRepl
+  ) const final {
+    llvm::outs() << "legal to inline";
+    auto returnOp = mlir::cast<ReturnOp>(op);
+
+    assert(returnOp.getNumOperands() == valuesToRepl.size());
+
+    for (const auto &it : llvm::enumerate(returnOp.getOperands()))
+      valuesToRepl[it.index()].replaceAllUsesWith(it.value());
+  }
+
+  // I guess whenever there's a type mismatch between the value and result type,
+  // seeks to inline an op which takes in only the input value and produces 
+  // a single output value of the expected type
+  Operation *materializeCallConversion(
+    OpBuilder &builder, 
+    Value input,
+    Type resultType,
+    Location conversionLoc
+  ) const final {
+    llvm::outs() << "calling materializecallconversion";
+    return builder.create<CastOp>(conversionLoc, resultType, input);
+  }
+};
 
 //===----------------------------------------------------------------------===//
 // ToyDialect
@@ -46,6 +105,9 @@ void ToyDialect::initialize() {
 #define GET_OP_LIST
 #include "Toy/Ops.cpp.inc"
       >();
+  
+  // Register the toy inliner
+  addInterfaces<ToyInlinerInterface>();
 }
 
 //===----------------------------------------------------------------------===//
@@ -200,6 +262,25 @@ void GenericCallOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                      mlir::SymbolRefAttr::get(builder.getContext(), callee));
 }
 
+
+// get the callable func from within the op instance
+CallInterfaceCallable GenericCallOp::getCallableForCallee() {
+    // -> operator is an overloadable field access operator 
+    // for example, -> could dispatch to a struct you're wrapping
+    // Remember: & gets an address, * dereferences, all can be overrode
+    return (*this)->getAttrOfType<SymbolRefAttr>("callee");
+}
+
+// set the callable func for this call op
+void GenericCallOp::setCalleeFromCallable(CallInterfaceCallable callee) {
+  (*this)->setAttr("callee", callee.get<SymbolRefAttr>());
+}
+
+// when in doubt of what's in your toolkit, check your .inc files and the docs
+Operation::operand_range GenericCallOp::getArgOperands() { return getInputs(); }
+
+MutableOperandRange GenericCallOp::getArgOperandsMutable() { return getInputsMutable(); }
+
 //===----------------------------------------------------------------------===//
 // FuncOp
 //===----------------------------------------------------------------------===//
@@ -301,18 +382,37 @@ void TransposeOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
 }
 
 mlir::LogicalResult TransposeOp::verify() {
+  // if the cast fails, one is not a tensor type or is just unranked, so null returned
   auto inputType = llvm::dyn_cast<RankedTensorType>(getOperand().getType());
   auto resultType = llvm::dyn_cast<RankedTensorType>(getType());
-  if (!inputType || !resultType)
+  if (!inputType || !resultType) 
     return mlir::success();
 
   auto inputShape = inputType.getShape();
   if (!std::equal(inputShape.begin(), inputShape.end(),
-                  resultType.getShape().rbegin())) {
+                  resultType.getShape().rbegin())) { // rbegin is a reverse iterator
     return emitError()
            << "expected result shape to be a transpose of the input";
   }
   return mlir::success();
+}
+
+// CastOp
+bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
+  llvm::outs() << "calling are cast compatible\n";
+  // in our toy lang, we only cast one value at a time
+  if (inputs.size() != 1 || outputs.size() != 1)
+    return false;
+
+  // attempt to cast inputs to TensorType
+  TensorType input = dyn_cast<TensorType>(inputs.front());
+  TensorType output = dyn_cast<TensorType>(outputs.front());
+  if (!input || !output || input.getElementType() != output.getElementType())
+    return false;
+
+  // return false only if two ranked tensors of different rank
+  return !input.hasRank() || !output.hasRank() || input == output;
+  
 }
 
 //===----------------------------------------------------------------------===//

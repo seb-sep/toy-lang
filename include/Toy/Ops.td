@@ -2,9 +2,10 @@
 #ifndef TOY_OPS
 #define TOY_OPS
 
-include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/FunctionInterfaces.td"
+include "mlir/Interfaces/CallInterfaces.td"
+include "mlir/Interfaces/CastInterfaces.td"
 include "mlir/IR/SymbolInterfaces.td"
 
 def Toy_Dialect: Dialect {
@@ -43,10 +44,12 @@ def ConstantOp: Toy_Op<"constant", [Pure]> {
 
     let builders = [
         OpBuilder<(ins "DenseElementsAttr":$value), [{
-            build(builder, result, value.getType(), value);
-        }]>,
-        OpBuilder<(ins "double":$value)>
+            build($_builder, $_state, value.getType(), value);
+        }]>, // with the blob is codegenned in the .cpp.inc file
+        OpBuilder<(ins "double":$value)> // without a code blob means we must implement ourselves
     ];
+
+    let hasCustomAssemblyFormat = 1;
 }
 
 def AddOp: Toy_Op<"add"> {
@@ -62,6 +65,8 @@ def AddOp: Toy_Op<"add"> {
     let builders = [
         OpBuilder<(ins "Value":$lhs, "Value":$rhs)>
     ];
+
+    let hasCustomAssemblyFormat = 1;
 }
 
 
@@ -99,7 +104,7 @@ def FuncOp: Toy_Op<"func", [
 
     let builders = [OpBuilder<(ins
         "StringRef":$name, "FunctionType":$type,
-        CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs
+        CArg<"ArrayRef<NamedAttribute>", "{}">:$attrs // CArg is for a default value
     )>];
 
     // I guess extraClassDeclaration lets us add arbitrary cpp code to the class?
@@ -117,9 +122,12 @@ def FuncOp: Toy_Op<"func", [
     // https://mlir.llvm.org/docs/DefiningDialects/AttributesAndTypes/
     // when do we not want to define the default builders?
     let skipDefaultBuilders = 1;
+
+    let hasCustomAssemblyFormat = 1;
 }
 
-def GenericCallOp : Toy_Op<"generic_call"> {
+def GenericCallOp : Toy_Op<"generic_call",
+    [DeclareOpInterfaceMethods<CallOpInterface>]> {
     
     // we need a generic verison of call because we only sometimes need to do
     // shape inference
@@ -148,6 +156,10 @@ def GenericCallOp : Toy_Op<"generic_call"> {
         OpBuilder<(ins "StringRef":$callee, "ArrayRef<Value>":$arguments)>
     ];
 
+    let assemblyFormat = [{
+        $callee `(` $inputs `)` attr-dict `:` functional-type($inputs, results)
+    }];
+
 }
 
 def MulOp : Toy_Op<"mul"> {
@@ -173,7 +185,9 @@ def PrintOp : Toy_Op<"print"> {
         The "print" builtin operation prints a given input tensor, and produces
         no results.
     }];
-    let arguments = (ins F64Tensor:$value);
+    let arguments = (ins F64Tensor:$input);
+
+    let assemblyFormat = "$input attr-dict `:` type($input)";
 }
 
 def ReshapeOp : Toy_Op<"reshape"> {
@@ -186,12 +200,15 @@ def ReshapeOp : Toy_Op<"reshape"> {
         ```
     }];
 
-    let arguments = (ins F64Tensor:$value);
+    let arguments = (ins F64Tensor:$input);
 
     // must be reshaping to a statically known type, 
     // the list in StaticShapeTensorOf is a list of allowed types to be in said tensor
     let results = (outs StaticShapeTensorOf<[F64]>);
 
+    let assemblyFormat = [{
+        `(` $input `:` type($input) `)` attr-dict `to` type(results)
+    }];
 }
 
 def ReturnOp : Toy_Op<"return", [Pure, HasParent<"FuncOp">, Terminator]> {
@@ -220,9 +237,11 @@ def ReturnOp : Toy_Op<"return", [Pure, HasParent<"FuncOp">, Terminator]> {
   }];
 
   let hasVerifier = 1;
+
+  let assemblyFormat = "($input^ `:` type($input))? attr-dict ";
 }
 
-def TransposeOp : Toy_Op<"transpose"> {
+def TransposeOp : Toy_Op<"transpose", [Pure]> {
     let summary = "transpose operation";
 
     let arguments = (ins F64Tensor:$input);
@@ -233,6 +252,34 @@ def TransposeOp : Toy_Op<"transpose"> {
     ];
 
     let hasVerifier = 1;
+
+    // when this is defined, we need an implementation of getCanonicalizationPatterns()
+    // with the patterns we want to be added
+    // https://mlir.llvm.org/docs/Canonicalization/
+    let hasCanonicalizer = 1;
+
+    let assemblyFormat = [{
+        `(` $input `:` type($input) `)` attr-dict `to` type(results)
+    }];
+}
+
+def CastOp : Toy_Op<"cast", [
+    DeclareOpInterfaceMethods<CastOpInterface>,
+    Pure,
+    SameOperandsAndResultShape]
+> {
+    let description = [{
+        The "cast" operation converts a tensor from one type to an equivalent type
+        without changing any data elements. The source and destination types
+        must both be tensor types with the same element type. If both are ranked,
+        then shape is required to match. The operation is invalid if converting
+        to a mismatching constant dimension.
+    }];
+
+    let arguments = (ins F64Tensor:$input);
+    let results = (outs F64Tensor:$output);
+    let assemblyFormat = "$input attr-dict `:` type($input) `to` type($output)";
+
 }
 
 // Adding the comment of TOY_OPS here is actually necessary to match with the #ifndef at the top

@@ -50,14 +50,16 @@ else()
 endif()
 
 # LLVM and MLIR include directories
-set(STANDALONE_SOURCE_DIR ${PROJECT_SOURCE_DIR})
-set(STANDALONE_BINARY_DIR ${PROJECT_BINARY_DIR})
 message(STATUS "LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
 message(STATUS "MLIR_INCLUDE_DIRS: ${MLIR_INCLUDE_DIRS}")
+message(STATUS "SOURCE_DIR: ${PROJECT_SOURCE_DIR}")
+message(STATUS "BINARY_DIR: ${PROJECT_BINARY_DIR}")
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
-include_directories(${STANDALONE_SOURCE_DIR}/include)
-include_directories(${STANDALONE_BINARY_DIR}/include)
+include_directories(${PROJECT_SOURCE_DIR}/include)
+include_directories(${PROJECT_BINARY_DIR}/include)
+include_directories(${PROJECT_BINARY_DIR}/lib)
+
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
 
@@ -72,6 +74,7 @@ add_llvm_executable(toyc
   compiler/AST.cpp
   lib/Toy/Dialect.cpp
   lib/Toy/MLIRGen.cpp
+  lib/Toy/ToyCombine.cpp
 )
 
 llvm_update_compile_flags(toyc)
@@ -90,6 +93,10 @@ set(mlir_libs
   MLIRSupport
   MLIRFuncDialect
   MLIRFuncTransforms
+  MLIRAnalysis
+  MLIRFunctionInterfaces
+  MLIRTransforms
+  MLIRPass
 )
 
 target_link_libraries(toyc PRIVATE
@@ -97,4 +104,4 @@ target_link_libraries(toyc PRIVATE
   ${llvm_libs}
 )
 
-# mlir_check_link_libraries(toyc)
+mlir_check_link_libraries(toyc)

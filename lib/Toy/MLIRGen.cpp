@@ -175,6 +175,10 @@ private:
           function.getFunctionType().getInputs(), getType(VarType{})));
     }
 
+    // If the function isn't main, set to private
+    if (funcAST.getProto()->getName() != "main")
+      function.setPrivate();
+
     return function;
   }
 

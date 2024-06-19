@@ -4,7 +4,8 @@
             "name": "Mac",
             "includePath": [
                 "${workspaceFolder}/**",
-                "~/Code/MLIR/llvm-project/**"
+                "~/Code/MLIR/llvm-project/**",
+                "${workspaceFolder}/build/include/**",
             ],
             "defines": [],
             "macFrameworkPath": [
