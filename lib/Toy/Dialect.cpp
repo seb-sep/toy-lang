@@ -57,13 +57,11 @@ struct ToyInlinerInterface : public DialectInlinerInterface {
 
   // All ops withing a toy region can be inlined
   bool isLegalToInline(Operation *, Region *, bool, IRMapping &) const final {
-    llvm::outs() << "legal to inline";
     return true;
   }
 
   // All regions (toy fns) can be inlined
   bool isLegalToInline(Region *dest, Region *src, bool wouldBeCloned, IRMapping &valueMapping) const final {
-    llvm::outs() << "legal to inline";
     return true;
   }
 
@@ -71,7 +69,6 @@ struct ToyInlinerInterface : public DialectInlinerInterface {
     Operation *op,
     ValueRange valuesToRepl
   ) const final {
-    llvm::outs() << "legal to inline";
     auto returnOp = mlir::cast<ReturnOp>(op);
 
     assert(returnOp.getNumOperands() == valuesToRepl.size());
@@ -89,7 +86,6 @@ struct ToyInlinerInterface : public DialectInlinerInterface {
     Type resultType,
     Location conversionLoc
   ) const final {
-    llvm::outs() << "calling materializecallconversion";
     return builder.create<CastOp>(conversionLoc, resultType, input);
   }
 };
@@ -399,7 +395,6 @@ mlir::LogicalResult TransposeOp::verify() {
 
 // CastOp
 bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
-  llvm::outs() << "calling are cast compatible\n";
   // in our toy lang, we only cast one value at a time
   if (inputs.size() != 1 || outputs.size() != 1)
     return false;

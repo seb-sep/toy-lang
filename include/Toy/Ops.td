@@ -2,6 +2,7 @@
 #ifndef TOY_OPS
 #define TOY_OPS
 
+// All op interfaces are written in tablegen, including the in-tree ones
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/FunctionInterfaces.td"
 include "mlir/Interfaces/CallInterfaces.td"
@@ -205,6 +206,8 @@ def ReshapeOp : Toy_Op<"reshape"> {
     // must be reshaping to a statically known type, 
     // the list in StaticShapeTensorOf is a list of allowed types to be in said tensor
     let results = (outs StaticShapeTensorOf<[F64]>);
+
+    let hasCanonicalizer = 1;
 
     let assemblyFormat = [{
         `(` $input `:` type($input) `)` attr-dict `to` type(results)

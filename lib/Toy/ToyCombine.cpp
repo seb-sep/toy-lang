@@ -44,9 +44,14 @@ Makes later optimizations simpler
 void TransposeOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context
 ) {
+    results.add<SimplifyRedundantTranspose>(context);
+}
+
+void ReshapeOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context
+) {
     
     results.add<
-        SimplifyRedundantTranspose, 
         ReshapeReshapeOptPattern, 
         RedundantReshapeOptPattern, 
         FoldConstantOpReshapePattern>(context);
