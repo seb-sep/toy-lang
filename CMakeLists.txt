@@ -75,6 +75,7 @@ add_llvm_executable(toyc
   lib/Toy/Dialect.cpp
   lib/Toy/MLIRGen.cpp
   lib/Toy/ToyCombine.cpp
+  lib/Toy/ShapeInferencePass.cpp
 )
 
 llvm_update_compile_flags(toyc)

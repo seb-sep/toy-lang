@@ -6,6 +6,7 @@
                 "${workspaceFolder}/**",
                 "~/Code/MLIR/llvm-project/**",
                 "${workspaceFolder}/build/include/**",
+                "${workspaceFolder}/build/lib/**",
             ],
             "defines": [],
             "macFrameworkPath": [

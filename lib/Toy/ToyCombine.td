@@ -14,11 +14,6 @@ def ReshapeReshapeOptPattern : Pat<
 >;
 
 
-// def DumbPattern : Pat<
-//     (ReshapeOp $arg),
-//     (replaceWithValue $arg)
-// >;
-
 // don't reshape a tensor to the same shape
 def TypesAreIdentical : Constraint<CPred<"$0.getType() == $1.getType()">>;
 def RedundantReshapeOptPattern : Pat<

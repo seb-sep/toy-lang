@@ -9,6 +9,8 @@ include "mlir/Interfaces/CallInterfaces.td"
 include "mlir/Interfaces/CastInterfaces.td"
 include "mlir/IR/SymbolInterfaces.td"
 
+include "Toy/ShapeInferenceInterface.td"
+
 def Toy_Dialect: Dialect {
     let name = "toy";
     let summary = "A high level dialect for the Toy language";
@@ -20,7 +22,8 @@ class Toy_Op<string mnemonic, list<Trait> traits = []>:
 
 // Pure trait is an alias for speculative execution and no memory use traits:
 // https://www.jeremykun.com/2023/09/07/mlir-using-traits/
-def ConstantOp: Toy_Op<"constant", [Pure]> {
+def ConstantOp: Toy_Op<"constant", 
+    [Pure]> {
 
     let summary = "constant operation";
     let description = [{
@@ -53,7 +56,8 @@ def ConstantOp: Toy_Op<"constant", [Pure]> {
     let hasCustomAssemblyFormat = 1;
 }
 
-def AddOp: Toy_Op<"add"> {
+def AddOp: Toy_Op<"add", 
+    [DeclareOpInterfaceMethods<ShapeInferenceOpInterface>]> {
     let summary = "element wise addition";
     let description = [{
         The "add" operation performs element-wise addition between two tensors.
@@ -163,7 +167,8 @@ def GenericCallOp : Toy_Op<"generic_call",
 
 }
 
-def MulOp : Toy_Op<"mul"> {
+def MulOp : Toy_Op<"mul",
+    [DeclareOpInterfaceMethods<ShapeInferenceOpInterface>]> {
   let summary = "element-wise multiplication operation";
   let description = [{
     The "mul" operation performs element-wise multiplication between two
@@ -244,7 +249,8 @@ def ReturnOp : Toy_Op<"return", [Pure, HasParent<"FuncOp">, Terminator]> {
   let assemblyFormat = "($input^ `:` type($input))? attr-dict ";
 }
 
-def TransposeOp : Toy_Op<"transpose", [Pure]> {
+def TransposeOp : Toy_Op<"transpose", 
+    [Pure, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>]> {
     let summary = "transpose operation";
 
     let arguments = (ins F64Tensor:$input);
@@ -268,6 +274,7 @@ def TransposeOp : Toy_Op<"transpose", [Pure]> {
 
 def CastOp : Toy_Op<"cast", [
     DeclareOpInterfaceMethods<CastOpInterface>,
+    DeclareOpInterfaceMethods<ShapeInferenceOpInterface>,
     Pure,
     SameOperandsAndResultShape]
 > {

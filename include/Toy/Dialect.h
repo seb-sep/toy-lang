@@ -23,6 +23,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/IR/MLIRContext.h"  
 #include "mlir/Support/TypeID.h"
+#include "Toy/ShapeInferenceInterface.h"
 
 /// Include the auto-generated header file containing the declaration of the toy
 /// dialect.

@@ -228,6 +228,7 @@ mlir::LogicalResult ConstantOp::verify() {
   return mlir::success();
 }
 
+
 //===----------------------------------------------------------------------===//
 // AddOp
 //===----------------------------------------------------------------------===//
@@ -244,6 +245,8 @@ mlir::ParseResult AddOp::parse(mlir::OpAsmParser &parser,
 }
 
 void AddOp::print(mlir::OpAsmPrinter &p) { printBinaryOp(p, *this); }
+
+void AddOp::inferShapes() { getResult().setType(getLhs().getType()); }
 
 //===----------------------------------------------------------------------===//
 // GenericCallOp
@@ -276,6 +279,7 @@ void GenericCallOp::setCalleeFromCallable(CallInterfaceCallable callee) {
 Operation::operand_range GenericCallOp::getArgOperands() { return getInputs(); }
 
 MutableOperandRange GenericCallOp::getArgOperandsMutable() { return getInputsMutable(); }
+
 
 //===----------------------------------------------------------------------===//
 // FuncOp
@@ -329,6 +333,9 @@ mlir::ParseResult MulOp::parse(mlir::OpAsmParser &parser,
 }
 
 void MulOp::print(mlir::OpAsmPrinter &p) { printBinaryOp(p, *this); }
+
+// set the type of the result of this op
+void MulOp::inferShapes() { getResult().setType(getLhs().getType()); }
 
 //===----------------------------------------------------------------------===//
 // ReturnOp
@@ -393,6 +400,13 @@ mlir::LogicalResult TransposeOp::verify() {
   return mlir::success();
 }
 
+void TransposeOp::inferShapes() { 
+  // get the ranked tensor type
+  auto inputType = llvm::cast<RankedTensorType>(getOperand().getType());
+  SmallVector<int64_t, 2> dims(llvm::reverse(inputType.getShape()));
+  getResult().setType(RankedTensorType::get(dims, inputType.getElementType()));
+}
+
 // CastOp
 bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   // in our toy lang, we only cast one value at a time
@@ -409,6 +423,8 @@ bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   return !input.hasRank() || !output.hasRank() || input == output;
   
 }
+
+void CastOp::inferShapes() { getResult().setType(getInput().getType()); }
 
 //===----------------------------------------------------------------------===//
 // TableGen'd op method definitions
