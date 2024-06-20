@@ -55,6 +55,11 @@
         "vector": "cpp",
         "algorithm": "cpp",
         "type_traits": "cpp",
-        "memory": "cpp"
+        "memory": "cpp",
+        "deque": "cpp",
+        "hash_map": "cpp",
+        "hash_set": "cpp",
+        "list": "cpp",
+        "unordered_set": "cpp"
     }
 }
