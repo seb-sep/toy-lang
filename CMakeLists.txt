@@ -76,12 +76,14 @@ add_llvm_executable(toyc
   lib/Toy/MLIRGen.cpp
   lib/Toy/ToyCombine.cpp
   lib/Toy/ShapeInferencePass.cpp
+  lib/Toy/LowerToAffineLoops.cpp
 )
 
 llvm_update_compile_flags(toyc)
 message(STATUS "LLVM_LIBS: ${llvm_libs}")
 target_include_directories(toyc PRIVATE ${CMAKE_SOURCE_DIR}/include)
-
+get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 set(mlir_libs
   MLIRIR
   MLIRParser
@@ -101,6 +103,8 @@ set(mlir_libs
 )
 
 target_link_libraries(toyc PRIVATE
+  ${dialect_libs}
+  ${extension_libs}
   ${mlir_libs}
   ${llvm_libs}
 )

@@ -9,8 +9,8 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Support/TypeID.h"
-#include "toy/Dialect.h"
-#include "toy/Passes.h"
+#include "Toy/Dialect.h"
+#include "Toy/Passes.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -46,7 +46,7 @@ static Value insertAllocAndDealloc(
     alloc->moveBefore(&parentBlock->front());
 
     // create the dealloc op
-    auto dealloc = rewriter.create<memref::DeallocOp>(loc, t);
+    auto dealloc = rewriter.create<memref::DeallocOp>(loc, alloc);
 
     // move the dealloc to the end of its block
     // why isn't this moveAfter() here?
@@ -89,34 +89,6 @@ static void lowerOpToLoops(
 
     rewriter.replaceOp(op, alloc);
 }
-
-// lowering toy.transpose to affine loop nest
-struct TransposeOpLowering : public ConversionPattern {
-    TransposeOpLowering(mlir::MLIRContext *ctx)
-        : mlir::ConversionPattern(toy::TransposeOp::getOperationName(), 1, ctx) {}
-
-    mlir::LogicalResult matchAndRewrite(
-        mlir::Operation *op,
-        ArrayRef<mlir::Value> operands,
-        mlir::ConversionPatternRewriter &rewriter
-    ) const final {
-        auto loc = op->getLoc();
-        lowerOpToLoops(op, operands, rewriter,
-            [loc](OpBuilder &builder, ValueRange memRefOperands, ValueRange loopIvs) {
-                // Adaptor auto-created from the ODS??? Lets us adapt the transpose op
-                // to the memref operands
-                toy::TransposeOpAdaptor transposeAdaptor(memRefOperands);
-                Value input = transposeAdaptor.getInput();
-
-                // Load the element by loading the transpose input in the reverse order
-                SmallVector<Value, 2> reverseIvs(llvm::reverse(loopIvs));
-                return builder.create<affine::AffineLoadOp>(loc, input, reverseIvs);
-            }
-        );
-        return success();
-    }
-};
-
 
 namespace {
 // Binary op rewriting from toy to affine
@@ -285,6 +257,19 @@ struct TransposeOpLowering : public ConversionPattern {
     }
 };
 
+// toy print op lowering
+struct PrintOpLowering : public OpConversionPattern<toy::PrintOp> {
+    using OpConversionPattern<toy::PrintOp>::OpConversionPattern;
+
+    LogicalResult
+    matchAndRewrite(toy::PrintOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const final {
+        rewriter.modifyOpInPlace(op, 
+            // I guess adaptor.getOperands() magically gives you the type you want??
+            [&] { op->setOperands(adaptor.getOperands()); });
+        return success();
+    }
+};
+
 // the actual toy lowering pass 
 namespace {
 struct ToyToAffineLoweringPass
@@ -322,12 +307,15 @@ void ToyToAffineLoweringPass::runOnOperation() {
     target.addDynamicallyLegalOp<toy::PrintOp>([](toy::PrintOp op) {
         // ensure that there are no tensor types left in print
         return llvm::none_of(op->getOperandTypes(), [](Type type) {
-            return type.isa<TensorType>();
+            // return type.isa<TensorType>();
+            return mlir::isa<TensorType>(type);
         });
     });
 
     mlir::RewritePatternSet patterns(&getContext());
-    patterns.add<TransposeOpLowering>(&getContext());
+    patterns.add<TransposeOpLowering, AddOpLowering, MulOpLowering, 
+        ConstantOpLowering, FuncOpLowering, ReturnOpLowering, TransposeOpLowering, PrintOpLowering>(&getContext());
+    
 
     // attempt the conversion
     if (failed(
@@ -336,3 +324,6 @@ void ToyToAffineLoweringPass::runOnOperation() {
 
 }
 
+std::unique_ptr<Pass> mlir::toy::createLowerToAffinePass() {
+    return std::make_unique<ToyToAffineLoweringPass>();
+}

@@ -7,7 +7,10 @@ namespace mlir {
 class Pass;
 
 namespace toy {
+
 std::unique_ptr<Pass> createShapeInferencePass();
+
+std::unique_ptr<Pass> createLowerToAffinePass();
 } // namespace toy
 } // namespace mlir
 
