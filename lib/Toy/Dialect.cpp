@@ -21,6 +21,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Location.h"
+#include "mlir/IR/Types.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Transforms/InliningUtils.h"
@@ -104,6 +105,7 @@ void ToyDialect::initialize() {
   
   // Register the toy inliner
   addInterfaces<ToyInlinerInterface>();
+  addTypes<StructType>();
 }
 
 //===----------------------------------------------------------------------===//
@@ -426,6 +428,52 @@ bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 
 void CastOp::inferShapes() { getResult().setType(getInput().getType()); }
 
+// Toy types
+
+namespace mlir {
+namespace toy {
+namespace detail {
+
+// Internal storage struct to hold the data of the Toy struct type.
+struct StructTypeStorage : public mlir::TypeStorage {
+
+  // used to unique instances of the type
+  // each instances is uniqued by the elements it contains
+  using KeyTy = llvm::ArrayRef<mlir::Type>;
+
+
+  llvm::ArrayRef<mlir::Type> elementTypes;
+
+  // c++ constructor which just sets the value of elementTypes to what's passed
+  StructTypeStorage(llvm::ArrayRef<mlir::Type> elementTypes)
+    : elementTypes(elementTypes) {}
+
+  // so you can == on llvm array refs?
+  // so this is implementing == on StructTypeStorage with a KeyTy
+  bool operator==(const KeyTy &key) const { return key == elementTypes; }
+
+  // constructor for a new storage instance
+  // The allocator MUST be used for dynamic allocations used to create type storage
+  static StructTypeStorage *constructor(mlir::TypeStorageAllocator &allocator, const KeyTy &key) {
+
+    // copy the elements into the allocator
+    llvm::ArrayRef<mlir::Type> elementTypes = allocator.copyInto(key);
+
+    // This new () Struct() syntax means that the new StructTypeStorage
+    // goes in the memory of (allocator.allocate())
+    return new (allocator.allocate<StructTypeStorage>()) StructTypeStorage(elementTypes);
+  }
+
+
+
+};
+
+} // namespace detail
+} // namespace toy
+} // namespace mlir
+
+// we're defining a type, so we inherit from mlir::TypeBase
+// Derived types in MLIR are templated on concrete type, type base class, and storage class
 //===----------------------------------------------------------------------===//
 // TableGen'd op method definitions
 //===----------------------------------------------------------------------===//
