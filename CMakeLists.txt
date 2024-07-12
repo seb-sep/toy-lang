@@ -31,6 +31,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(LLVM_LINK_COMPONENTS
     Core
     Support
+    nativecodegen
+    OrcJIT
   )
 
   llvm_map_components_to_libnames(llvm_libs ${LLVM_LINK_COMPONENTS})
@@ -77,6 +79,7 @@ add_llvm_executable(toyc
   lib/Toy/ToyCombine.cpp
   lib/Toy/ShapeInferencePass.cpp
   lib/Toy/LowerToAffineLoops.cpp
+  lib/Toy/LowerToLLVM.cpp
 )
 
 llvm_update_compile_flags(toyc)
@@ -100,6 +103,13 @@ set(mlir_libs
   MLIRFunctionInterfaces
   MLIRTransforms
   MLIRPass
+  MLIRBuiltinToLLVMIRTranslation
+  MLIRExecutionEngine
+  MLIRLLVMCommonConversion
+  MLIRLLVMDialect
+  MLIRLLVMToLLVMIRTranslation
+  MLIRMemRefDialect
+  MLIRTargetLLVMIRExport
 )
 
 target_link_libraries(toyc PRIVATE

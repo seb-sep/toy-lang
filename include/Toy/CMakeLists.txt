@@ -11,8 +11,8 @@ mlir_tablegen(Dialect.cpp.inc -gen-dialect-defs)
 add_public_tablegen_target(ToyIncGen)
 
 # Look into what add_mlir_interfaces() has to do with this
-# set(LLVM_TARGET_DEFINITIONS ShapeInferenceInterface.td)
-# mlir_tablegen(ShapeInferenceOpInterfaces.h.inc -gen-op-interface-decls)
-# mlir_tablegen(ShapeInferenceOpInterfaces.cpp.inc -gen-op-interface-defs)
+set(LLVM_TARGET_DEFINITIONS ShapeInferenceInterface.td)
+mlir_tablegen(ShapeInferenceOpInterfaces.h.inc -gen-op-interface-decls)
+mlir_tablegen(ShapeInferenceOpInterfaces.cpp.inc -gen-op-interface-defs)
 # add_public_tablegen_target(ShapeInferenceInterfaceIncGen)
 add_mlir_interface(ShapeInferenceInterface)
