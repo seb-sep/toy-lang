@@ -107,6 +107,7 @@ int loadMLIR(mlir::MLIRContext &context,
     auto moduleAST = parseInputFile(inputFilename);
     if (!moduleAST)
       return 6;
+    
     module = mlirGen(context, *moduleAST);
     return !module ? 1 : 0;
   }
@@ -310,9 +311,7 @@ int main(int argc, char **argv) {
     case Action::DumpMLIR:
     case Action::DumpMLIRAffine:
     case Action::DumpMLIRLLVM: {
-      std::cout << "dumping mlir \n";
       module->dump();
-      std::cout << "dumped \n";
       return 0;
     }
     case Action::DumpLLVMIR: {

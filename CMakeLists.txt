@@ -86,6 +86,7 @@ llvm_update_compile_flags(toyc)
 message(STATUS "LLVM_LIBS: ${llvm_libs}")
 target_include_directories(toyc PRIVATE ${CMAKE_SOURCE_DIR}/include)
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+get_property(conversion_libs GLOBAL PROPERTY MLIR_CONVERSION_LIBS)
 get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 set(mlir_libs
   MLIRIR
@@ -115,6 +116,7 @@ set(mlir_libs
 target_link_libraries(toyc PRIVATE
   ${dialect_libs}
   ${extension_libs}
+  ${conversion_libs}
   ${mlir_libs}
   ${llvm_libs}
 )

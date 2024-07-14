@@ -16,12 +16,17 @@
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OperationSupport.h"
+#include "mlir/IR/TypeSupport.h"
+#include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Types.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/ValueRange.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Transforms/InliningUtils.h"
@@ -31,6 +36,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/ADT/Hashing.h"
 #include <algorithm>
 #include <string>
 #include <cstdint>
@@ -200,35 +207,75 @@ void ConstantOp::print(mlir::OpAsmPrinter &printer) {
   printer << getValue();
 }
 
+static mlir::LogicalResult verifyConstantForType(
+  mlir::Type type, 
+  mlir::Attribute opaqueValue, 
+  mlir::Operation *op
+) {
+  if (llvm::isa<TensorType>(type)) {
+    auto attrValue = llvm::dyn_cast<mlir::DenseFPElementsAttr>(opaqueValue);
+    if (!attrValue)
+      return op->emitOpError("constant of TensorType must have a value" 
+                          "of DenseElementsAttr, got ")
+        << opaqueValue;
+      
+    // if the tensor shape is unranked, nothing to verify
+    auto resultType = llvm::dyn_cast<mlir::RankedTensorType>(type);
+    if (!resultType)
+      return success();
+    
+    // otherwise, it's ranked, so we have to make sure shapes match
+    auto attrType = llvm::cast<mlir::RankedTensorType>(attrValue.getType());
+    if (attrType.getRank() != resultType.getRank()) 
+      return op->emitOpError("Rank of return type must match the rank of attribute: ")
+        << resultType.getRank() << " != " << attrType.getRank();
+
+    // then, check that each dim matches
+    for (int dim=0, dimE = attrType.getRank(); dim<dimE; dim++) {
+      if (attrType.getShape()[dim] != resultType.getShape()[dim])
+        return op->emitOpError("Dimension of attribute ") 
+          << attrType.getShape()[dim] << " mismatches dim of return "
+          << resultType.getShape()[dim] << " at dimension " << dim << " \n";
+    }
+
+    return mlir::success();
+  }
+
+  // if the type is not a tensor, then it's a struct
+  auto resultType = llvm::cast<StructType>(type);
+  llvm::ArrayRef<mlir::Type> resultElementTypes = resultType.getElementTypes();
+
+  // if it's a struct, attribute for the constant struct must be an array
+  auto attrValue = llvm::dyn_cast<ArrayAttr>(opaqueValue);
+  if (!attrValue || attrValue.getValue().size() != resultElementTypes.size())
+    return op->emitOpError("constant struct must with ") << resultElementTypes.size()
+      << " elements was initialized with ArrayAttr of " << attrValue.getValue().size() 
+      << " elements\n";
+  
+  // verify each element of struct
+  llvm::ArrayRef<mlir::Attribute> attrElementValues = attrValue.getValue();
+  for (const auto it : llvm::zip(resultElementTypes, attrElementValues)) {
+    // compare the result and attr element for each in struct
+    if (failed(verifyConstantForType(std::get<0>(it), std::get<1>(it), op)))
+      return mlir::failure();
+  }
+  return mlir::success();
+
+
+}
+
 /// Verifier for the constant operation. This corresponds to the
 /// `let hasVerifier = 1` in the op definition.
 mlir::LogicalResult ConstantOp::verify() {
-  // If the return type of the constant is not an unranked tensor, the shape
-  // must match the shape of the attribute holding the data.
-  auto resultType = llvm::dyn_cast<mlir::RankedTensorType>(getResult().getType());
-  if (!resultType)
-    return success();
-
-  // Check that the rank of the attribute type matches the rank of the constant
-  // result type.
-  auto attrType = llvm::cast<mlir::RankedTensorType>(getValue().getType());
-  if (attrType.getRank() != resultType.getRank()) {
-    return emitOpError("return type must match the one of the attached value "
-                       "attribute: ")
-           << attrType.getRank() << " != " << resultType.getRank();
-  }
-
-  // Check that each of the dimensions match between the two types.
-  for (int dim = 0, dimE = attrType.getRank(); dim < dimE; ++dim) {
-    if (attrType.getShape()[dim] != resultType.getShape()[dim]) {
-      return emitOpError(
-                 "return type shape mismatches its attribute at dimension ")
-             << dim << ": " << attrType.getShape()[dim]
-             << " != " << resultType.getShape()[dim];
-    }
-  }
-  return mlir::success();
+  // we have a this context because this is a method on constantop
+  return verifyConstantForType(getResult().getType(), getValue(), *this);
 }
+
+mlir::LogicalResult StructConstantOp::verify() {
+  // we have a this context because this is a method on constantop
+  return verifyConstantForType(getResult().getType(), getValue(), *this);
+}
+
 
 
 //===----------------------------------------------------------------------===//
@@ -428,6 +475,38 @@ bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 
 void CastOp::inferShapes() { getResult().setType(getInput().getType()); }
 
+// StructAccessOp
+void StructAccessOp::build(
+  mlir::OpBuilder &b, 
+  mlir::OperationState &state, 
+  // remmeber, these two match what we specified in ODS
+  mlir::Value input, size_t index
+) {
+  // the return type can be taken from the input
+  StructType structTy = llvm::cast<StructType>(input.getType());
+  assert(index < structTy.getNumElementTypes());
+  mlir::Type resultType = structTy.getElementTypes()[index];
+
+  // build is autogenerated
+  build(b, state, resultType, input, b.getI64IntegerAttr(index));
+}
+
+mlir::LogicalResult StructAccessOp::verify() {
+  StructType structTy = llvm::cast<StructType>(getInput().getType());
+  size_t indexValue = getIndex();
+  if (indexValue >= structTy.getNumElementTypes())
+    return emitOpError() << "index " << indexValue 
+      << " must be less than num of elements " << structTy.getNumElementTypes() << "\n";
+  
+  // we can assume this exists because we already have the op
+  mlir::Type resultType = getResult().getType();
+  if (resultType != structTy.getElementTypes()[indexValue])
+    return emitOpError() << "type of accessed value must match that in the struct\n";
+
+  return mlir::success();
+}
+
+
 // Toy types
 
 namespace mlir {
@@ -441,7 +520,6 @@ struct StructTypeStorage : public mlir::TypeStorage {
   // each instances is uniqued by the elements it contains
   using KeyTy = llvm::ArrayRef<mlir::Type>;
 
-
   llvm::ArrayRef<mlir::Type> elementTypes;
 
   // c++ constructor which just sets the value of elementTypes to what's passed
@@ -454,7 +532,7 @@ struct StructTypeStorage : public mlir::TypeStorage {
 
   // constructor for a new storage instance
   // The allocator MUST be used for dynamic allocations used to create type storage
-  static StructTypeStorage *constructor(mlir::TypeStorageAllocator &allocator, const KeyTy &key) {
+  static StructTypeStorage *construct(mlir::TypeStorageAllocator &allocator, const KeyTy &key) {
 
     // copy the elements into the allocator
     llvm::ArrayRef<mlir::Type> elementTypes = allocator.copyInto(key);
@@ -464,13 +542,71 @@ struct StructTypeStorage : public mlir::TypeStorage {
     return new (allocator.allocate<StructTypeStorage>()) StructTypeStorage(elementTypes);
   }
 
-
-
 };
 
 } // namespace detail
 } // namespace toy
 } // namespace mlir
+
+StructType StructType::get(llvm::ArrayRef<mlir::Type> elementTypes) {
+  assert(!elementTypes.empty() && "expected at least 1 element type");
+
+  // typebase get gives us a uniqued instance of the type???
+  // need the right context to unique in
+  // elements from the constructor go to the new instance
+  mlir::MLIRContext *ctx = elementTypes.front().getContext();
+  return Base::get(ctx, elementTypes);
+}
+
+llvm::ArrayRef<mlir::Type> StructType::getElementTypes() {
+  // we get the getImpl() fn from the typebase, it knows
+  // to hook up to our storage struct
+  return getImpl()->elementTypes;
+}
+
+// parse the type
+mlir::Type ToyDialect::parseType(mlir::DialectAsmParser &parser) const {
+  // struct-type ::= `struct` `<` type (`,` type)* `>`
+
+  // should this be !(parse struct || parse <)?
+  // No it shold not, because mlir::logicalresult is truthy on FAILURE
+  if (parser.parseKeyword("struct") || parser.parseLess())
+    return Type();
+
+  // parse struct elements
+  SmallVector<mlir::Type, 1> elementTypes;
+  do {
+    // having the location when we parse the next token is helpful for errors ig
+    SMLoc typeLoc = parser.getCurrentLocation();
+    mlir::Type elementType;
+    if (!parser.parseType(elementType))
+      return nullptr;
+
+    // better be a tensor or struct
+    if (!llvm::isa<TensorType, StructType>(elementType)) {
+      parser.emitError(typeLoc, "element must be either a struct or tensor type, got: ")
+        << elementType;
+      return Type();
+    }
+    elementTypes.push_back(elementType);
+
+  } while (succeeded(parser.parseOptionalComma()));
+
+  // parse the >
+  if (parser.parseGreater())
+    return Type();
+  return StructType::get(elementTypes);
+}
+
+void ToyDialect::printType(mlir::Type type, mlir::DialectAsmPrinter &printer) const {
+  // only type is struct
+  StructType structType = llvm::cast<StructType>(type);
+
+  printer << "struct<";
+  // interleave comma iterates a function (printer) over a collection with a comma in between
+  llvm::interleaveComma(structType.getElementTypes(), printer);
+  printer << '>';
+}
 
 // we're defining a type, so we inherit from mlir::TypeBase
 // Derived types in MLIR are templated on concrete type, type base class, and storage class

@@ -15,10 +15,27 @@ def Toy_Dialect: Dialect {
     let name = "toy";
     let summary = "A high level dialect for the Toy language";
     let cppNamespace = "::mlir::toy";
+
+    // declarations for materializeConstant
+    // let hasConstantMaterializer = 1;
+
+    // generate definitions for printing and parsing
+    let useDefaultTypePrinterParser = 1;
 }
+
+// Toy struct type
+// the cpred just helps w type checking here
+def Toy_StructType :
+    DialectType<Toy_Dialect, CPred<"::llvm::isa<StructType>($_self)">,
+                "Toy struct type">;
+
+// these are the only types present in toy
+def Toy_Type : AnyTypeOf<[F64Tensor, Toy_StructType]>;
+
 
 class Toy_Op<string mnemonic, list<Trait> traits = []>:
     Op<Toy_Dialect, mnemonic, traits>;
+
 
 // Pure trait is an alias for speculative execution and no memory use traits:
 // https://www.jeremykun.com/2023/09/07/mlir-using-traits/
@@ -290,6 +307,52 @@ def CastOp : Toy_Op<"cast", [
     let results = (outs F64Tensor:$output);
     let assemblyFormat = "$input attr-dict `:` type($input) `to` type($output)";
 
+}
+
+def StructConstantOp : Toy_Op<"struct_constant", [ConstantLike, Pure]> {
+    let summary = "struct constant";
+    let description = [{
+        Constant operation turns a literal struct value into an SSA value. The data
+        is attached to the operation as an attribute. The struct constant is encoded
+        as an array of other constant values. For example:
+
+        ```mlir
+        %0 = toy.struct_constant [
+            dense<[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]> : tensor<2x3xf64>
+        ] : !toy.struct<tensor<*xf64>>
+        ```
+    }];
+
+    let arguments = (ins ArrayAttr:$value);
+    // this type makes sense, because the op is of a struct literal,
+    // so the output is of type Toy_StructType
+    let results = (outs Toy_StructType:$output);
+
+    let assemblyFormat = "$value attr-dict `:` type($output)";
+
+    let hasVerifier = 1;
+    // let hasFolder = 1;
+}
+
+def StructAccessOp : Toy_Op<"struct_access", [Pure]> {
+    let summary = "struct access";
+    let description = [{
+        Access the Nth element of a value returning a struct type.
+    }];
+
+    let arguments = (ins Toy_StructType:$input, I64Attr:$index);
+    let results = (outs Toy_Type:$output);
+
+    let assemblyFormat = [{
+        $input `[` $index `]` attr-dict `:` type($input) `->` type($output)
+    }];
+
+    let builders = [
+        OpBuilder<(ins "Value":$input, "size_t":$index)>
+    ];
+
+    let hasVerifier = 1;
+    // let hasFolder = 1;
 }
 
 // Adding the comment of TOY_OPS here is actually necessary to match with the #ifndef at the top

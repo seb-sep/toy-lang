@@ -1,0 +1,7 @@
+struct Struct {
+  var a;
+  var b;
+}
+
+def multiply_transpose(Struct value) {
+}

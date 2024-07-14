@@ -53,6 +53,8 @@ private:
   void dump(PrintExprAST *node);
   void dump(PrototypeAST *node);
   void dump(FunctionAST *node);
+  void dump(StructLiteralExprAST *node);
+  void dump(StructAST *node);
 
   // Actually print spaces matching the current indentation level
   void indent() {
@@ -83,7 +85,7 @@ static std::string loc(T *node) {
 void ASTDumper::dump(ExprAST *expr) {
   llvm::TypeSwitch<ExprAST *>(expr)
       .Case<BinaryExprAST, CallExprAST, LiteralExprAST, NumberExprAST,
-            PrintExprAST, ReturnExprAST, VarDeclExprAST, VariableExprAST>(
+            PrintExprAST, ReturnExprAST, StructLiteralExprAST, VarDeclExprAST, VariableExprAST>(
           [&](auto *node) { this->dump(node); })
       .Default([&](ExprAST *) {
         // No match, fallback to a generic message
@@ -147,6 +149,15 @@ void ASTDumper::dump(LiteralExprAST *node) {
   INDENT();
   llvm::errs() << "Literal: ";
   printLitHelper(node);
+  llvm::errs() << " " << loc(node) << "\n";
+}
+
+void ASTDumper::dump(StructLiteralExprAST *node) {
+  INDENT();
+  llvm::errs() << "Struct: ";
+  for (auto &value : node->getValues())
+    dump(value.get());
+  indent();
   llvm::errs() << " " << loc(node) << "\n";
 }
 
@@ -223,12 +234,33 @@ void ASTDumper::dump(FunctionAST *node) {
   dump(node->getBody());
 }
 
+/// Print a struct
+void ASTDumper::dump(StructAST *node) {
+  INDENT();
+  llvm::errs() << "Struct :" << node->getName() << " " << loc(node) << "\n";
+
+  {
+    INDENT();
+    llvm::errs() << "Variables: [\n";
+    for (auto &var : node->getVariables())
+      dump(var.get());
+    indent();
+    llvm::errs() << "]\n";
+  }
+}
+
 /// Print a module, actually loop over the functions and print them in sequence.
 void ASTDumper::dump(ModuleAST *node) {
   INDENT();
   llvm::errs() << "Module:\n";
-  for (auto &f : *node)
-    dump(&f);
+  for (auto &record : *node) {
+    if (FunctionAST *f = llvm::dyn_cast<FunctionAST>(record.get()))
+      dump(f);
+    else if (StructAST *str = llvm::dyn_cast<StructAST>(record.get()))
+      dump(str);
+    else 
+      llvm::errs() << "unknown record type " << record->getKind() << "\n";
+  }
 }
 
 namespace toy {

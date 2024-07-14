@@ -31,12 +31,14 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <cstdint>
 #include <functional>
 #include <numeric>
 #include <optional>
 #include <vector>
+#include <iostream> 
 
 using namespace mlir::toy;
 using namespace toy;
@@ -68,8 +70,20 @@ public:
     // add them to the module.
     theModule = mlir::ModuleOp::create(builder.getUnknownLoc());
 
-    for (FunctionAST &f : moduleAST)
-      mlirGen(f);
+    // now, could be a functionAST or structAST
+    for (auto &record : moduleAST) {
+      if (FunctionAST *funcAST = llvm::dyn_cast<FunctionAST>(record.get())) {
+        mlir::toy::FuncOp func = mlirGen(*funcAST);
+        if (!func)
+          return nullptr;
+        functionMap.insert({func.getName(), func});
+      } else if (StructAST *structAST = llvm::dyn_cast<StructAST>(record.get())) {
+        if (failed(mlirGen(*structAST)))
+          return nullptr;
+      } else {
+        llvm_unreachable("unknown record type");
+      }
+    }
 
     // Verify the module after we have finished constructing it, this will check
     // the structural properties of the IR and invoke any specific verifiers we
@@ -95,7 +109,15 @@ private:
   /// Entering a function creates a new scope, and the function arguments are
   /// added to the mapping. When the processing of a function is terminated, the
   /// scope is destroyed and the mappings created in this scope are dropped.
-  llvm::ScopedHashTable<StringRef, mlir::Value> symbolTable;
+  llvm::ScopedHashTable<StringRef, std::pair<mlir::Value, VarDeclExprAST *>> symbolTable;
+  using SymbolTableScopeT = 
+    llvm::ScopedHashTableScope<StringRef, std::pair<mlir::Value, VarDeclExprAST *>>;
+
+  // registry of all function defs
+  llvm::StringMap<mlir::toy::FuncOp> functionMap;
+
+  // registry of struct defs
+  llvm::StringMap<std::pair<mlir::Type, StructAST *>> structMap;
 
   /// Helper conversion for a Toy AST location to an MLIR location.
   mlir::Location loc(const Location &loc) {
@@ -105,10 +127,10 @@ private:
 
   /// Declare a variable in the current scope, return success if the variable
   /// wasn't declared yet.
-  mlir::LogicalResult declare(llvm::StringRef var, mlir::Value value) {
-    if (symbolTable.count(var))
+  mlir::LogicalResult declare(VarDeclExprAST &var, mlir::Value value) {
+    if (symbolTable.count(var.getName()))
       return mlir::failure();
-    symbolTable.insert(var, value);
+    symbolTable.insert(var.getName(), {value, &var});
     return mlir::success();
   }
 
@@ -119,8 +141,14 @@ private:
 
     // This is a generic function, the return type will be inferred later.
     // Arguments type are uniformly unranked tensors.
-    llvm::SmallVector<mlir::Type, 4> argTypes(proto.getArgs().size(),
-                                              getType(VarType{}));
+    llvm::SmallVector<mlir::Type, 4> argTypes;
+    argTypes.reserve(proto.getArgs().size());
+    for (auto &arg : proto.getArgs()) {
+      mlir::Type type = getType(arg->getType(), arg->loc());
+      if (!type)
+        return nullptr;
+      argTypes.push_back(type);
+    }
     auto funcType = builder.getFunctionType(argTypes, std::nullopt);
     return builder.create<mlir::toy::FuncOp>(location, proto.getName(),
                                              funcType);
@@ -129,22 +157,26 @@ private:
   /// Emit a new function and add it to the MLIR module.
   mlir::toy::FuncOp mlirGen(FunctionAST &funcAST) {
     // Create a scope in the symbol table to hold variable declarations.
-    ScopedHashTableScope<llvm::StringRef, mlir::Value> varScope(symbolTable);
+    SymbolTableScopeT varScope(symbolTable);
+
 
     // Create an MLIR function for the given prototype.
     builder.setInsertionPointToEnd(theModule.getBody());
     mlir::toy::FuncOp function = mlirGen(*funcAST.getProto());
     if (!function)
       return nullptr;
+    
 
     // Let's start the body of the function now!
     mlir::Block &entryBlock = function.front();
     auto protoArgs = funcAST.getProto()->getArgs();
 
+
+
     // Declare all the function arguments in the symbol table.
     for (const auto nameValue :
          llvm::zip(protoArgs, entryBlock.getArguments())) {
-      if (failed(declare(std::get<0>(nameValue)->getName(),
+      if (failed(declare(*std::get<0>(nameValue),
                          std::get<1>(nameValue))))
         return nullptr;
     }
@@ -172,7 +204,7 @@ private:
       // Otherwise, if this return operation has an operand then add a result to
       // the function.
       function.setType(builder.getFunctionType(
-          function.getFunctionType().getInputs(), getType(VarType{})));
+          function.getFunctionType().getInputs(), *returnOp.operand_type_begin()));
     }
 
     // If the function isn't main, set to private
@@ -180,6 +212,73 @@ private:
       function.setPrivate();
 
     return function;
+  }
+
+  // Get the struct type that the given expr is part of
+  StructAST *getStructFor(ExprAST *expr) {
+    llvm::StringRef structName;
+    if (auto *decl = llvm::dyn_cast<VariableExprAST>(expr)) {
+      auto varIt = symbolTable.lookup(decl->getName());
+      if (!varIt.first)
+        return nullptr;
+      structName = varIt.second->getType().name;
+    } else if (auto *access = llvm::dyn_cast<BinaryExprAST>(expr)) {
+      if (access->getOp() != '.')
+        return nullptr;
+      auto *name = llvm::dyn_cast<VariableExprAST>(access->getRHS());
+      if (!name)
+        return nullptr;
+      StructAST *parentStruct = getStructFor(access->getLHS());
+      if (!parentStruct)
+        return nullptr;
+      
+      // Search over each var in the parent struct until you find
+      // the one accessed in the access op
+      VarDeclExprAST *decl = nullptr;
+      for (auto &var : parentStruct->getVariables()) {
+        if (var->getName() == name->getName()) {
+          decl = var.get();
+          break;
+        }
+      }
+      if (!decl)
+        return nullptr;
+      structName = decl->getType().name;
+    }
+    if (structName.empty()) {
+      return nullptr;
+    }
+
+    auto structIt = structMap.find(structName);
+    if (structIt == structMap.end())
+      return nullptr;
+    return structIt->second.second;
+
+  }
+
+  // get the index of the variable the operator is accessing
+  std::optional<size_t> getMemberIndex(BinaryExprAST &accessOp) {
+    assert(accessOp.getOp() == '.' && "expected access operation");
+
+    // Lookup the struct in the AST which this op is accessing
+    StructAST *structAST = getStructFor(accessOp.getLHS());
+    if (!structAST)
+      return std::nullopt;
+
+    VariableExprAST *name = llvm::dyn_cast<VariableExprAST>(accessOp.getRHS());
+    if (!name)
+      return std::nullopt;
+
+    auto vars = structAST->getVariables();
+    const auto *it = llvm::find_if(vars, [&](auto &var) {
+      return var->getName() == name->getName();
+    });
+    if (it == vars.end())
+      return std::nullopt;
+    // literally pointer arithmetic? it and begin() are both iterators 
+    // as pointers in the iterable, so this is their distance 
+    return it - vars.begin();
+
   }
 
   /// Emit a binary operation
@@ -198,10 +297,20 @@ private:
     mlir::Value lhs = mlirGen(*binop.getLHS());
     if (!lhs)
       return nullptr;
+    auto location = loc(binop.loc());
+
+    if (binop.getOp() == '.') {
+      std::optional<size_t> accessIndex = getMemberIndex(binop);
+      if (!accessIndex) {
+        emitError(location, "invalid access into struct");
+        return nullptr;
+      }
+      return builder.create<StructAccessOp>(location, lhs, *accessIndex);
+    }
+    
     mlir::Value rhs = mlirGen(*binop.getRHS());
     if (!rhs)
       return nullptr;
-    auto location = loc(binop.loc());
 
     // Derive the operation name from the binary operator. At the moment we only
     // support '+' and '*'.
@@ -220,7 +329,7 @@ private:
   /// expected to have been declared and so should have a value in the symbol
   /// table, otherwise emit an error and return nullptr.
   mlir::Value mlirGen(VariableExprAST &expr) {
-    if (auto variable = symbolTable.lookup(expr.getName()))
+    if (auto variable = symbolTable.lookup(expr.getName()).first)
       return variable;
 
     emitError(loc(expr.loc()), "error: unknown variable '")
@@ -245,6 +354,90 @@ private:
     return mlir::success();
   }
 
+  mlir::LogicalResult mlirGen(StructAST &str) {
+
+    // has this struct been defined already
+    if (structMap.contains(str.getName()))
+      return emitError(loc(str.loc())) << "error: struct type with name " 
+        << str.getName() << " already exists\n";
+
+    auto variables = str.getVariables();
+    std::vector<mlir::Type> elementTypes;
+    elementTypes.reserve(variables.size());
+    for (auto &variable : variables) {
+      // vars in structs should not have initilaize
+      if (variable->getInitVal())
+        return emitError(loc(variable->loc())) << "error: variable " 
+          << variable->getName() << " should not have initializer";
+      // if the shape is not empty, something has been initialized
+      if (!variable->getType().shape.empty())
+        return emitError(loc(variable->loc())) << "error: variable " 
+          << variable->getName() << " should not have initializer";
+
+      mlir::Type type = getType(variable->getType(), variable->loc());
+      if (!type)
+        return mlir::failure();
+      elementTypes.push_back(type);
+
+    }
+    // emplace methods simply construct elements in place, so the pair is implicitly constructed
+    structMap.try_emplace(str.getName(), StructType::get(elementTypes), &str);
+    return mlir::success();
+  }
+
+
+  mlir::DenseElementsAttr getConstantAttr(LiteralExprAST &lit) {
+    // The attribute is a vector with a floating point value per element
+    // (number) in the array, see `collectData()` below for more details.
+    std::vector<double> data;
+    data.reserve(std::accumulate(lit.getDims().begin(), lit.getDims().end(), 1,
+                                 std::multiplies<int>()));
+    collectData(lit, data);
+
+    // The type of this attribute is tensor of 64-bit floating-point with the
+    // shape of the literal.
+    mlir::Type elementType = builder.getF64Type();
+    auto dataType = mlir::RankedTensorType::get(lit.getDims(), elementType);
+
+    // This is the actual attribute that holds the list of values for this
+    // tensor literal.
+    return mlir::DenseElementsAttr::get(dataType, llvm::ArrayRef(data));
+  }
+
+  mlir::DenseElementsAttr getConstantAttr(NumberExprAST &num) {
+    // tensor of fp64
+    mlir::Type elementType = builder.getF64Type();
+    auto dataType = mlir::RankedTensorType::get({}, elementType);
+    
+    // creating dense elements value with a single value of the given type?
+    return mlir::DenseElementsAttr::get(dataType, llvm::ArrayRef(num.getValue()));
+  }
+
+  std::pair<mlir::ArrayAttr, mlir::Type>
+  getConstantAttr(StructLiteralExprAST &str) {
+    std::vector<mlir::Attribute> attrElements;
+    std::vector<mlir::Type> typeElements;
+
+    for (auto &var : str.getValues()) {
+      if (auto *num = llvm::dyn_cast<NumberExprAST>(var.get())) {
+        attrElements.push_back(getConstantAttr(*num));
+        typeElements.push_back(getType(std::nullopt));
+      } else if (auto *lit = llvm::dyn_cast<LiteralExprAST>(var.get())) {
+        attrElements.push_back(getConstantAttr(*lit));
+        typeElements.push_back(getType(std::nullopt));
+      } else {
+        auto *structLit = llvm::cast<StructLiteralExprAST>(var.get());
+        auto attrTypePair = getConstantAttr(*structLit);
+        attrElements.push_back(attrTypePair.first);
+        typeElements.push_back(attrTypePair.second);
+      }
+    }
+
+    mlir::ArrayAttr dataAttr = builder.getArrayAttr(attrElements);
+    mlir::Type dataType = StructType::get(typeElements);
+    return std::make_pair(dataAttr, dataType);
+  }
+
   /// Emit a literal/constant array. It will be emitted as a flattened array of
   /// data in an Attribute attached to a `toy.constant` operation.
   /// See documentation on [Attributes](LangRef.md#attributes) for more details.
@@ -265,27 +458,19 @@ private:
   ///
   mlir::Value mlirGen(LiteralExprAST &lit) {
     auto type = getType(lit.getDims());
-
-    // The attribute is a vector with a floating point value per element
-    // (number) in the array, see `collectData()` below for more details.
-    std::vector<double> data;
-    data.reserve(std::accumulate(lit.getDims().begin(), lit.getDims().end(), 1,
-                                 std::multiplies<int>()));
-    collectData(lit, data);
-
-    // The type of this attribute is tensor of 64-bit floating-point with the
-    // shape of the literal.
-    mlir::Type elementType = builder.getF64Type();
-    auto dataType = mlir::RankedTensorType::get(lit.getDims(), elementType);
-
-    // This is the actual attribute that holds the list of values for this
-    // tensor literal.
-    auto dataAttribute =
-        mlir::DenseElementsAttr::get(dataType, llvm::ArrayRef(data));
+    mlir::DenseElementsAttr dataAttribute = getConstantAttr(lit);
 
     // Build the MLIR op `toy.constant`. This invokes the `ConstantOp::build`
     // method.
     return builder.create<ConstantOp>(loc(lit.loc()), type, dataAttribute);
+  }
+
+  mlir::Value mlirGen(StructLiteralExprAST &str) {
+    mlir::ArrayAttr dataAttr;
+    mlir::Type dataType;
+    std::tie(dataAttr, dataType) = getConstantAttr(str);
+
+    return builder.create<StructConstantOp>(loc(str.loc()), dataType, dataAttr);
   }
 
   /// Recursive helper function to accumulate the data that compose an array
@@ -336,7 +521,16 @@ private:
     // Otherwise this is a call to a user-defined function. Calls to
     // user-defined functions are mapped to a custom call that takes the callee
     // name as an attribute.
-    return builder.create<GenericCallOp>(location, callee, operands);
+    // Now, we don't just pretend we have the callee, we actually try to look for it first
+    auto fit = functionMap.find(callee);
+    if (fit == functionMap.end()) {
+      emitError(location) << "function " << callee << " not found\n";
+      return nullptr;
+    }
+
+    mlir::toy::FuncOp calledFunc = fit->second;
+    return builder.create<GenericCallOp>(location, calledFunc.getFunctionType().getResult(0),
+      mlir::SymbolRefAttr::get(builder.getContext(), callee), operands);
   }
 
   /// Emit a print expression. It emits specific operations for two builtins:
@@ -392,23 +586,34 @@ private:
     if (!value)
       return nullptr;
 
-    // We have the initializer value, but in case the variable was declared
+    VarType varType = vardecl.getType();
+    if (!varType.name.empty()) {
+        // if there is an initial type, make sure it's the same as the one
+        // you're declaring
+        mlir::Type type = getType(varType, vardecl.loc());
+        if (type != value.getType()) {
+          emitError(loc(vardecl.loc())) 
+            << "struct type of initializer " << value.getType() 
+            << " is different than variable declaration type " << type;
+          return nullptr;
+        }
+    // Otherwise, we have the initializer value, but in case the variable was declared
     // with specific shape, we emit a "reshape" operation. It will get
     // optimized out later as needed.
-    if (!vardecl.getType().shape.empty()) {
-      value = builder.create<ReshapeOp>(loc(vardecl.loc()),
-                                        getType(vardecl.getType()), value);
+    } else if (!varType.shape.empty()) {
+      value = builder.create<ReshapeOp>(loc(vardecl.loc()), getType(varType.shape), value);
     }
 
+
     // Register the value in the symbol table.
-    if (failed(declare(vardecl.getName(), value)))
+    if (failed(declare(vardecl, value)))
       return nullptr;
     return value;
   }
 
   /// Codegen a list of expression, return failure if one of them hit an error.
   mlir::LogicalResult mlirGen(ExprASTList &blockAST) {
-    ScopedHashTableScope<StringRef, mlir::Value> varScope(symbolTable);
+    SymbolTableScopeT varScope(symbolTable);
     for (auto &expr : blockAST) {
       // Specific handling for variable declarations, return statement, and
       // print. These can only appear in block list and not in nested
@@ -445,7 +650,19 @@ private:
 
   /// Build an MLIR type from a Toy AST variable type (forward to the generic
   /// getType above).
-  mlir::Type getType(const VarType &type) { return getType(type.shape); }
+  mlir::Type getType(const VarType &type, const Location &location) { 
+    // if the type has a name, it must already exist
+    if (!type.name.empty()) {
+      auto it = structMap.find(type.name);
+      if (it == structMap.end()) {
+        emitError(loc(location)) << "error: unknown type " << type.name << "\n";
+        return nullptr;
+      }
+      return it->second.first;
+
+    }
+    return getType(type.shape); 
+  }
 };
 
 } // namespace
