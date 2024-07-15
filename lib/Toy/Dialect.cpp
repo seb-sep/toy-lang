@@ -271,6 +271,12 @@ mlir::LogicalResult ConstantOp::verify() {
   return verifyConstantForType(getResult().getType(), getValue(), *this);
 }
 
+
+void ConstantOp::inferShapes() { getResult().setType(llvm::cast<TensorType>(getValue().getType())); }
+
+
+// StructConstantOp
+
 mlir::LogicalResult StructConstantOp::verify() {
   // we have a this context because this is a method on constantop
   return verifyConstantForType(getResult().getType(), getValue(), *this);
@@ -475,6 +481,7 @@ bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
 
 void CastOp::inferShapes() { getResult().setType(getInput().getType()); }
 
+
 // StructAccessOp
 void StructAccessOp::build(
   mlir::OpBuilder &b, 
@@ -607,6 +614,20 @@ void ToyDialect::printType(mlir::Type type, mlir::DialectAsmPrinter &printer) co
   llvm::interleaveComma(structType.getElementTypes(), printer);
   printer << '>';
 }
+
+// remmeber that the struct access op folding outputs an attr
+mlir::Operation *ToyDialect::materializeConstant(
+  mlir::OpBuilder &builder, 
+  mlir::Attribute value, 
+  mlir::Type type, 
+  mlir::Location loc
+) {
+  if (llvm::isa<StructType>(type))
+    return builder.create<StructConstantOp>(loc, type, llvm::cast<mlir::ArrayAttr>(value));
+  return builder.create<ConstantOp>(loc, type, llvm::cast<mlir::DenseElementsAttr>(value));
+}
+
+
 
 // we're defining a type, so we inherit from mlir::TypeBase
 // Derived types in MLIR are templated on concrete type, type base class, and storage class

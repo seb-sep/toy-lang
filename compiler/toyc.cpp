@@ -202,10 +202,10 @@ int dumpAST() {
 }
 
 // return the (potentially optimized) LLVM as an llvm module
-llvm::Expected<std::unique_ptr<llvm::Module>> processLLVM(mlir::ModuleOp module) {
+llvm::Error dumpLLVM(mlir::ModuleOp module) {
   // register the translation to LLVM with the mlir context
-  // mlir::registerBuiltinDialectTranslation(*module->getContext());
-  // mlir::registerLLVMDialectTranslation(*module->getContext());
+  mlir::registerBuiltinDialectTranslation(*module->getContext());
+  mlir::registerLLVMDialectTranslation(*module->getContext());
 
   llvm::LLVMContext llvmContext;
   auto llvmModule = mlir::translateModuleToLLVMIR(module, llvmContext);
@@ -237,9 +237,8 @@ llvm::Expected<std::unique_ptr<llvm::Module>> processLLVM(mlir::ModuleOp module)
       llvm::inconvertibleErrorCode());
   }
 
-  // use std::move to wrap in a unique pointer
-  // I guess this signature auto wraps in an llvm expected?
-  return std::move(llvmModule);
+  llvmModule->dump();
+  return llvm::Error::success();
 }
 
 int runLLVMJIT(mlir::ModuleOp module) {
@@ -315,14 +314,16 @@ int main(int argc, char **argv) {
       return 0;
     }
     case Action::DumpLLVMIR: {
-      auto expectedLLVM = processLLVM(*module);
-      if (!expectedLLVM) {
-        llvm::handleAllErrors(expectedLLVM.takeError(), [&](const llvm::ErrorInfoBase &error) {
+      // if you try to return the llvm module, cpp goes crazy
+      // because the llvm context created inside went out of scope, which means 
+      // that the module is probably destroyed as soon as you leave the fn
+      if (auto err = dumpLLVM(*module)) {
+        llvm::handleAllErrors(std::move(err), [&](const llvm::ErrorInfoBase &error) {
           llvm::errs() << "Failed to process into LLVM: " << error.message() << "\n";
         });
         return 1;
       }
-      expectedLLVM.get()->dump();
+      
       return 0;
     }
     case Action::JitLLVM:

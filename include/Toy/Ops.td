@@ -17,7 +17,7 @@ def Toy_Dialect: Dialect {
     let cppNamespace = "::mlir::toy";
 
     // declarations for materializeConstant
-    // let hasConstantMaterializer = 1;
+    let hasConstantMaterializer = 1;
 
     // generate definitions for printing and parsing
     let useDefaultTypePrinterParser = 1;
@@ -40,7 +40,8 @@ class Toy_Op<string mnemonic, list<Trait> traits = []>:
 // Pure trait is an alias for speculative execution and no memory use traits:
 // https://www.jeremykun.com/2023/09/07/mlir-using-traits/
 def ConstantOp: Toy_Op<"constant", 
-    [Pure]> {
+    [Pure, ConstantLike, 
+    DeclareOpInterfaceMethods<ShapeInferenceOpInterface>]> {
 
     let summary = "constant operation";
     let description = [{
@@ -61,6 +62,8 @@ def ConstantOp: Toy_Op<"constant",
 
     // creates a mlir::LogicalResult::verify() stub in the corresponding generated c++ file
     let hasVerifier = 1;
+
+    let hasFolder = 1;
 
 
     let builders = [
@@ -170,9 +173,9 @@ def GenericCallOp : Toy_Op<"generic_call",
 
     // we're allowed to define the arguments like this because
     // the only type in Toy is an f64tensor, so all args will be a list of tensors
-    let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<F64Tensor>:$inputs);
+    let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<Toy_Type>:$inputs);
 
-    let results = (outs F64Tensor);
+    let results = (outs Toy_Type);
 
     let builders = [
         OpBuilder<(ins "StringRef":$callee, "ArrayRef<Value>":$arguments)>
@@ -251,7 +254,7 @@ def ReturnOp : Toy_Op<"return", [Pure, HasParent<"FuncOp">, Terminator]> {
         ```
   }];
 
-  let arguments = (ins Variadic<F64Tensor>:$input);
+  let arguments = (ins Variadic<Toy_Type>:$input);
 
   let builders = [
     OpBuilder<(ins), [{ build($_builder, $_state, std::nullopt); }]>
@@ -331,7 +334,7 @@ def StructConstantOp : Toy_Op<"struct_constant", [ConstantLike, Pure]> {
     let assemblyFormat = "$value attr-dict `:` type($output)";
 
     let hasVerifier = 1;
-    // let hasFolder = 1;
+    let hasFolder = 1;
 }
 
 def StructAccessOp : Toy_Op<"struct_access", [Pure]> {
@@ -352,7 +355,7 @@ def StructAccessOp : Toy_Op<"struct_access", [Pure]> {
     ];
 
     let hasVerifier = 1;
-    // let hasFolder = 1;
+    let hasFolder = 1;
 }
 
 // Adding the comment of TOY_OPS here is actually necessary to match with the #ifndef at the top

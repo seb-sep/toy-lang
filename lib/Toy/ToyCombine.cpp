@@ -12,6 +12,22 @@ namespace {
 #include "Toy/ToyCombine.inc"
 } // namespace
 
+OpFoldResult ConstantOp::fold(FoldAdaptor adaptor) { return getValue(); }
+
+OpFoldResult StructConstantOp::fold(FoldAdaptor adaptor) { return getValue(); }
+
+OpFoldResult StructAccessOp::fold(FoldAdaptor adaptor) {
+    // getInput is a getter on the input argument to the struct access op
+    auto structAttr = llvm::dyn_cast_if_present<ArrayAttr>(adaptor.getInput());
+    if (!structAttr)
+        return nullptr; // must coerce this into a real result
+    
+    size_t elementIndex = getIndex();
+    return structAttr[elementIndex];
+}
+
+
+
 struct SimplifyRedundantTranspose : public mlir::OpRewritePattern<TransposeOp> {
     SimplifyRedundantTranspose(mlir::MLIRContext *context) 
     : OpRewritePattern<TransposeOp>(context) {}
